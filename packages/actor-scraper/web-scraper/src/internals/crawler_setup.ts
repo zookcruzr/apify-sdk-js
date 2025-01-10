@@ -371,22 +371,23 @@ export class CrawlerSetup implements CrawlerSetupOptions {
      * Finally, it makes decisions based on the current state and post-processes
      * the data returned from the `pageFunction`.
      */
+    
     private async _requestHandler(crawlingContext: PuppeteerCrawlingContext) {
         const { request, response, page, crawler, proxyInfo } = crawlingContext;
         const start = process.hrtime();
         const pageContext = this.pageContexts.get(page)!;
-
+    
         /**
          * PRE-PROCESSING
          */
         // Make sure that an object containing internal metadata
         // is present on every request.
         tools.ensureMetaData(request);
-
+    
         // Abort the crawler if the maximum number of results was reached.
         const aborted = await this._handleMaxResultsPerCrawl(crawler.autoscaledPool);
         if (aborted) return;
-
+    
         // Setup Context and pass the configuration down to Browser.
         const contextOptions = {
             crawlerSetup: {
@@ -406,35 +407,56 @@ export class CrawlerSetup implements CrawlerSetupOptions {
                 },
             },
         };
-
+    
         /**
          * USER FUNCTION EXECUTION
          */
         tools.logPerformance(request, 'requestHandler PREPROCESSING', start);
-
+    
         if (this.isDevRun && this.input.breakpointLocation === BreakpointLocation.BeforePageFunction) {
             await page.evaluate(async () => { debugger; }); // eslint-disable-line no-debugger
         }
-
+    
         if (this.input.closeCookieModals) {
             await setTimeout(500);
             await page.evaluate(getInjectableScript());
             await setTimeout(2000);
         }
-
+    
         if (this.input.maxScrollHeightPixels > 0) {
             await crawlingContext.infiniteScroll({ maxScrollHeight: this.input.maxScrollHeightPixels });
         }
-
+    
         const startUserFn = process.hrtime();
-
+    
         const namespace = pageContext.apifyNamespace;
         const output = await page.evaluate(async (ctxOpts: typeof contextOptions, namespc: string) => {
             const context: ReturnType<typeof createContext>['context'] = window[namespc].createContext(ctxOpts);
-            // eslint-disable-next-line @typescript-eslint/no-shadow
             const output = {} as Output;
             try {
-                output.pageFunctionResult = await window[namespc].pageFunction(context);
+                const originalResult = await window[namespc].pageFunction(context);
+    
+                /******************************************************************
+                 * INSERTED SCRAPING LOGIC START                                  *
+                 ******************************************************************/
+                try {
+                    await context.page.waitForSelector('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type', { timeout: 10000 });
+                    const firstParagraph = await context.page.$('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type');
+                    if (firstParagraph) {
+                        const statusText = await firstParagraph.evaluate(el => el.textContent.trim());
+                        context.pushData({ url: context.request.url, status: statusText });
+                    } else {
+                        context.pushData({ url: context.request.url, status: "No status found" });
+                    }
+                } catch (error) {
+                    console.error(`Error scraping ${context.request.url}: ${error}`);
+                    context.pushData({url: context.request.url, status: "Error scraping page"});
+                }
+                /******************************************************************
+                 * INSERTED SCRAPING LOGIC END                                    *
+                 ******************************************************************/
+    
+                output.pageFunctionResult = originalResult;
             } catch (err) {
                 const casted = err as Error;
                 output.pageFunctionError = Object.getOwnPropertyNames(casted)
@@ -443,16 +465,9 @@ export class CrawlerSetup implements CrawlerSetupOptions {
                         return memo;
                     }, {} as Dictionary);
             }
-
-            // This needs to be added after pageFunction has run.
+    
             output.requestFromBrowser = context.request as Request;
-
-            /**
-             * Since Dates cannot travel back to Node and Puppeteer does not use .toJSON
-             * to stringify, they come back as empty objects. We could use JSON.stringify
-             * ourselves, but that exposes us to overridden .toJSON in the target websites.
-             * This hack is not ideal, but it avoids both problems.
-             */
+    
             function replaceAllDatesInObjectWithISOStrings(obj: Output) {
                 for (const [key, value] of Object.entries(obj)) {
                     if (value instanceof Date && typeof value.toISOString === 'function') {
@@ -463,13 +478,13 @@ export class CrawlerSetup implements CrawlerSetupOptions {
                 }
                 return obj;
             }
-
+    
             return replaceAllDatesInObjectWithISOStrings(output);
         }, contextOptions, namespace);
-
+    
         tools.logPerformance(request, 'requestHandler USER FUNCTION', startUserFn);
         const finishUserFn = process.hrtime();
-
+    
         /**
          * POST-PROCESSING
          */
@@ -477,23 +492,23 @@ export class CrawlerSetup implements CrawlerSetupOptions {
         // Merge requestFromBrowser into request to preserve modifications that
         // may have been made in browser context.
         Object.assign(request, requestFromBrowser);
-
+    
         // Throw error from pageFunction, if any.
         if (pageFunctionError) throw tools.createError(pageFunctionError);
-
+    
         // Enqueue more links if a link selector is available,
         // unless the user invoked the `skipLinks()` context function
         // or maxCrawlingDepth would be exceeded.
         if (!pageContext.skipLinks) {
             await this._handleLinks(crawlingContext);
         }
-
+    
         // Save the `pageFunction`s result (or just metadata) to the default dataset.
         await this._handleResult(request, response, pageFunctionResult);
-
+    
         tools.logPerformance(request, 'requestHandler POSTPROCESSING', finishUserFn);
         tools.logPerformance(request, 'requestHandler EXECUTION', start);
-
+    
         if (this.isDevRun && this.input.breakpointLocation === BreakpointLocation.AfterPageFunction) {
             await page.evaluate(async () => { debugger; }); // eslint-disable-line no-debugger
         }
