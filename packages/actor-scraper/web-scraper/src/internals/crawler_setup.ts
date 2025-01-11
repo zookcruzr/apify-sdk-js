@@ -373,166 +373,68 @@ export class CrawlerSetup implements CrawlerSetupOptions {
      */
     
     private async _requestHandler(crawlingContext: PuppeteerCrawlingContext) {
-        const { request, response, page, crawler, proxyInfo } = crawlingContext;
-        const start = process.hrtime();
-        const pageContext = this.pageContexts.get(page)!;
+        const { request, response, page, log } = crawlingContext;
     
-        /**
-         * PRE-PROCESSING
-         */
-        // Make sure that an object containing internal metadata
-        // is present on every request.
-        tools.ensureMetaData(request);
-    
-        // Abort the crawler if the maximum number of results was reached.
-        const aborted = await this._handleMaxResultsPerCrawl(crawler.autoscaledPool);
-        if (aborted) return;
-    
-        // Setup Context and pass the configuration down to Browser.
-        const contextOptions = {
-            crawlerSetup: {
-                rawInput: this.rawInput,
-                env: this.env,
-                customData: this.input.customData,
-                injectJQuery: this.input.injectJQuery,
-                META_KEY,
-            },
-            browserHandles: pageContext.browserHandles,
-            pageFunctionArguments: {
-                request,
-                proxyInfo,
-                response: {
-                    status: response && response.status(),
-                    headers: response && response.headers(),
-                },
-            },
-        };
-    
-        /**
-         * USER FUNCTION EXECUTION
-         */
-        tools.logPerformance(request, 'requestHandler PREPROCESSING', start);
-    
-        if (this.isDevRun && this.input.breakpointLocation === BreakpointLocation.BeforePageFunction) {
-            await page.evaluate(async () => { debugger; }); // eslint-disable-line no-debugger
-        }
-    
-        if (this.input.closeCookieModals) {
-            await setTimeout(500);
-            await page.evaluate(getInjectableScript());
-            await setTimeout(2000);
-        }
-    
-        if (this.input.maxScrollHeightPixels > 0) {
-            await crawlingContext.infiniteScroll({ maxScrollHeight: this.input.maxScrollHeightPixels });
-        }
-    
-        const startUserFn = process.hrtime();
-    
-        const namespace = pageContext.apifyNamespace;
-        const output = await page.evaluate(async (ctxOpts: typeof contextOptions, namespc: string) => {
-            const context: ReturnType<typeof createContext>['context'] = window[namespc].createContext(ctxOpts);
-            const output = {} as Output;
-            try {
-                const originalResult = await window[namespc].pageFunction(context);
-    
-                /******************************************************************
-                 * INSERTED SCRAPING LOGIC START                                  *
-                 ******************************************************************/
-                try {
-                    await context.page.waitForSelector('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type', { timeout: 10000 });
-                    const firstParagraph = await context.page.$('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type');
-                    if (firstParagraph) {
-                        const statusText = await firstParagraph.evaluate(el => el.textContent.trim());
-                        context.pushData({ url: context.request.url, status: statusText });
-                    } else {
-                        context.pushData({ url: context.request.url, status: "No status found" });
-                    }
-                } catch (error) {
-                    console.error(`Error scraping ${context.request.url}: ${error}`);
-                    context.pushData({url: context.request.url, status: "Error scraping page"});
-                }
-                /******************************************************************
-                 * INSERTED SCRAPING LOGIC END                                    *
-                 ******************************************************************/
-    
-                output.pageFunctionResult = originalResult;
-            } catch (err) {
-                const casted = err as Error;
-                output.pageFunctionError = Object.getOwnPropertyNames(casted)
-                    .reduce((memo, name) => {
-                        memo[name] = casted[name as keyof Error];
-                        return memo;
-                    }, {} as Dictionary);
-            }
-    
-            output.requestFromBrowser = context.request as Request;
-    
-            function replaceAllDatesInObjectWithISOStrings(obj: Output) {
-                for (const [key, value] of Object.entries(obj)) {
-                    if (value instanceof Date && typeof value.toISOString === 'function') {
-                        Reflect.set(obj, key, value.toISOString());
-                    } else if (value && typeof value === 'object') {
-                        replaceAllDatesInObjectWithISOStrings(value as Output);
-                    }
-                }
-                return obj;
-            }
-    
-            return replaceAllDatesInObjectWithISOStrings(output);
-        }, contextOptions, namespace);
-    
-        const { pageFunctionResult, requestFromBrowser, pageFunctionError } = output;
-        Object.assign(request, requestFromBrowser);
-
-         if (pageFunctionError) {
-            throw tools.createError(pageFunctionError);
-        }
-
         try {
-            await page.waitForSelector('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type', { timeout: 10000 });
-            const firstParagraph = await page.$('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type');
-
-            if (firstParagraph) {
-                const statusText = await firstParagraph.evaluate(el => el.textContent.trim());
-                await this._handleResult(request, response, { status: statusText });
+            const output = await page.evaluate(async (ctxOpts, namespc) => {
+                const context = window[namespc].createContext(ctxOpts);
+                const output = {} as Output;
+                try {
+                    const originalResult = await window[namespc].pageFunction(context);
+    
+                    /******************************************************************
+                     * CORRECTED SCRAPING LOGIC START (INSIDE page.evaluate)          *
+                     * REMOVE context.pushData calls from HERE                       *
+                     ******************************************************************/
+                    let scrapedStatus = null; // Initialize to null
+    
+                    try {
+                        await context.page.waitForSelector('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type', { timeout: 10000 });
+                        const firstParagraph = await context.page.$('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type');
+    
+                        if (firstParagraph) {
+                            scrapedStatus = await firstParagraph.evaluate(el => el.textContent.trim());
+                        }
+                    } catch (error) {
+                        console.error(`Error scraping within page.evaluate: ${error}`);
+                    }
+    
+                    output.scrapedStatus = scrapedStatus; // Add scraped data to output
+    
+                    /******************************************************************
+                     * CORRECTED SCRAPING LOGIC END                                   *
+                     ******************************************************************/
+    
+                    output.pageFunctionResult = originalResult;
+                } catch (err) {
+                    const casted = err as Error;
+                    output.pageFunctionError = Object.getOwnPropertyNames(casted)
+                        .reduce((memo, name) => {
+                            memo[name] = casted[name as keyof Error];
+                            return memo;
+                        }, {} as Dictionary);
+                }
+                output.requestFromBrowser = context.request;
+                return output;
+            }, contextOptions, namespace);
+    
+            const { pageFunctionResult, requestFromBrowser, pageFunctionError, scrapedStatus } = output;
+            Object.assign(request, requestFromBrowser);
+    
+            if (pageFunctionError) {
+              log.error(`pageFunction error: ${pageFunctionError.message}`, pageFunctionError);
+              await this._handleResult(request, response, { error: pageFunctionError.message }, true);
             } else {
-            await this._handleResult(request, response, { status: "No status found" });
+                // *** CALL _handleResult HERE (OUTSIDE page.evaluate) ***
+                if (scrapedStatus) {
+                    await this._handleResult(request, response, { status: scrapedStatus });
+                } else {
+                    await this._handleResult(request, response, { status: "No status found" });
+                }
             }
         } catch (error) {
-            log.error(`Error scraping ${request.url}: ${error}`);
-            await this._handleResult(request, response, { status: "Error scraping page" }, true);
-        }
-        
-        tools.logPerformance(request, 'requestHandler USER FUNCTION', startUserFn);
-        const finishUserFn = process.hrtime();
-    
-        /**
-         * POST-PROCESSING
-         */
-        const { pageFunctionResult, requestFromBrowser, pageFunctionError } = output;
-        // Merge requestFromBrowser into request to preserve modifications that
-        // may have been made in browser context.
-        Object.assign(request, requestFromBrowser);
-    
-        // Throw error from pageFunction, if any.
-        if (pageFunctionError) throw tools.createError(pageFunctionError);
-    
-        // Enqueue more links if a link selector is available,
-        // unless the user invoked the `skipLinks()` context function
-        // or maxCrawlingDepth would be exceeded.
-        if (!pageContext.skipLinks) {
-            await this._handleLinks(crawlingContext);
-        }
-    
-        // Save the `pageFunction`s result (or just metadata) to the default dataset.
-        await this._handleResult(request, response, pageFunctionResult);
-    
-        tools.logPerformance(request, 'requestHandler POSTPROCESSING', finishUserFn);
-        tools.logPerformance(request, 'requestHandler EXECUTION', start);
-    
-        if (this.isDevRun && this.input.breakpointLocation === BreakpointLocation.AfterPageFunction) {
-            await page.evaluate(async () => { debugger; }); // eslint-disable-line no-debugger
+            log.error(`Error in _requestHandler: ${error}`);
+            await this._failedRequestHandler(request, error);
         }
     }
 
