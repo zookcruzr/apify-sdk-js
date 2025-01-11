@@ -374,51 +374,67 @@ export class CrawlerSetup implements CrawlerSetupOptions {
     
     private async _requestHandler(crawlingContext: PuppeteerCrawlingContext) {
         const { request, response, page, log } = crawlingContext;
-    
+        const start = Date.now();
         try {
             const output = await page.evaluate(async (ctxOpts, namespc) => {
-                // This is the most important part to check:
+                console.log("Entering page.evaluate"); // Debug log 1: Inside page.evaluate
+                console.log("Namespace:", namespc); // Debug log 2: Check the namespace
+    
                 if (!window[namespc]) {
-                    console.error("Apify namespace not found in browser context!");
-                    return { error: "Apify namespace not found" }; // Return an error object
+                    const errorMessage = "Apify namespace NOT found in browser context!";
+                    console.error(errorMessage);
+                    return { error: errorMessage };
                 }
+    
                 if (!window[namespc].createContext) {
-                    console.error("Apify.createContext not found in browser context!");
-                    return { error: "Apify.createContext not found" };
+                    const errorMessage = "Apify.createContext NOT found in browser context!";
+                    console.error(errorMessage);
+                    return { error: errorMessage };
                 }
-            
+    
                 const context = window[namespc].createContext(ctxOpts);
-            
-                if (!context || !context.page) {
-                    console.error("Context or context.page is undefined!");
-                    return { error: "Context or context.page is undefined" };
+    
+                if (!context) {
+                    const errorMessage = "Context is undefined!";
+                    console.error(errorMessage);
+                    return { error: errorMessage };
                 }
-            
-                const output = {};
+    
+                if (!context.page) {
+                    const errorMessage = "context.page is undefined!";
+                    console.error(errorMessage);
+                    return { error: errorMessage };
+                }
+                console.log("context.page is:", context.page); // Debug log: check the context.page
+    
+                console.log("Calling pageFunction"); // Debug log: before calling pageFunction
+                let pageFunctionResult = null;
                 try {
-                    const result = await window[namespc].pageFunction(context);
-                    output.pageFunctionResult = result;
-                } catch (e) {
-                    console.error("Error in pageFunction:", e);
-                    output.pageFunctionError = { message: e.message, stack: e.stack };
+                    pageFunctionResult = await window[namespc].pageFunction(context);
+                } catch (pageFunctionError) {
+                    console.error("Error in pageFunction:", pageFunctionError);
+                    return { error: pageFunctionError.message };
                 }
-                output.requestFromBrowser = context.request;
-                return output;
+                console.log("pageFunction result:", pageFunctionResult); // Debug log: pageFunction result
+                console.log("Exiting page.evaluate"); // Debug log: exiting page.evaluate
+                return { pageFunctionResult, requestFromBrowser: context.request };
             }, contextOptions, namespace);
     
-            const { pageFunctionResult, requestFromBrowser, pageFunctionError, scrapedStatus } = output;
+    
+            const { pageFunctionResult, requestFromBrowser, error } = output;
             Object.assign(request, requestFromBrowser);
     
-            if (pageFunctionError) {
-              log.error(`pageFunction error: ${pageFunctionError.message}`, pageFunctionError);
-              await this._handleResult(request, response, { error: pageFunctionError.message }, true);
+            if (error) {
+                log.error(`Error from page.evaluate: ${error}`);
+                await this._handleResult(request, response, { status: error }, true);
+                return; // Important: Exit the handler if there's an error
+            }
+            if (pageFunctionResult) {
+                await this._handleResult(request, response, pageFunctionResult);
             } else {
-                // *** CALL _handleResult HERE (OUTSIDE page.evaluate) ***
-                if (scrapedStatus) {
-                    await this._handleResult(request, response, { status: scrapedStatus });
-                } else {
-                    await this._handleResult(request, response, { status: "No status found" });
-                }
+                // Handle cases where pageFunctionResult is null or undefined
+                log.info(`pageFunction returned nothing for ${request.url}`);
+                await this._handleResult(request, response, { status: "No status found from page function" });
             }
         } catch (error) {
             log.error(`Error in _requestHandler: ${error}`);
