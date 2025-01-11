@@ -482,6 +482,28 @@ export class CrawlerSetup implements CrawlerSetupOptions {
             return replaceAllDatesInObjectWithISOStrings(output);
         }, contextOptions, namespace);
     
+        const { pageFunctionResult, requestFromBrowser, pageFunctionError } = output;
+        Object.assign(request, requestFromBrowser);
+
+         if (pageFunctionError) {
+            throw tools.createError(pageFunctionError);
+        }
+
+        try {
+            await page.waitForSelector('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type', { timeout: 10000 });
+            const firstParagraph = await page.$('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type');
+
+            if (firstParagraph) {
+                const statusText = await firstParagraph.evaluate(el => el.textContent.trim());
+                await this._handleResult(request, response, { status: statusText });
+            } else {
+            await this._handleResult(request, response, { status: "No status found" });
+            }
+        } catch (error) {
+            log.error(`Error scraping ${request.url}: ${error}`);
+            await this._handleResult(request, response, { status: "Error scraping page" }, true);
+        }
+        
         tools.logPerformance(request, 'requestHandler USER FUNCTION', startUserFn);
         const finishUserFn = process.hrtime();
     
