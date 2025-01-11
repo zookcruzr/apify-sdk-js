@@ -377,42 +377,30 @@ export class CrawlerSetup implements CrawlerSetupOptions {
     
         try {
             const output = await page.evaluate(async (ctxOpts, namespc) => {
-                const context = window.crea.Apify.createContext(ctxOpts);
-                const output = {} as Output;
+                // This is the most important part to check:
+                if (!window[namespc]) {
+                    console.error("Apify namespace not found in browser context!");
+                    return { error: "Apify namespace not found" }; // Return an error object
+                }
+                if (!window[namespc].createContext) {
+                    console.error("Apify.createContext not found in browser context!");
+                    return { error: "Apify.createContext not found" };
+                }
+            
+                const context = window[namespc].createContext(ctxOpts);
+            
+                if (!context || !context.page) {
+                    console.error("Context or context.page is undefined!");
+                    return { error: "Context or context.page is undefined" };
+                }
+            
+                const output = {};
                 try {
-                    const originalResult = await window[namespc].pageFunction(context);
-    
-                    /******************************************************************
-                     * CORRECTED SCRAPING LOGIC START (INSIDE page.evaluate)          *
-                     * REMOVE context.pushData calls from HERE                       *
-                     ******************************************************************/
-                    let scrapedStatus = null; // Initialize to null
-    
-                    try {
-                        await context.page.waitForSelector('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type', { timeout: 10000 });
-                        const firstParagraph = await context.page.$('.mu-markdown_mu_markdown__pqmRi:nth-of-type(2) p:first-of-type');
-    
-                        if (firstParagraph) {
-                            scrapedStatus = await firstParagraph.evaluate(el => el.textContent.trim());
-                        }
-                    } catch (error) {
-                        console.error(`Error scraping within page.evaluate: ${error}`);
-                    }
-    
-                    output.scrapedStatus = scrapedStatus; // Add scraped data to output
-    
-                    /******************************************************************
-                     * CORRECTED SCRAPING LOGIC END                                   *
-                     ******************************************************************/
-    
-                    output.pageFunctionResult = originalResult;
-                } catch (err) {
-                    const casted = err as Error;
-                    output.pageFunctionError = Object.getOwnPropertyNames(casted)
-                        .reduce((memo, name) => {
-                            memo[name] = casted[name as keyof Error];
-                            return memo;
-                        }, {} as Dictionary);
+                    const result = await window[namespc].pageFunction(context);
+                    output.pageFunctionResult = result;
+                } catch (e) {
+                    console.error("Error in pageFunction:", e);
+                    output.pageFunctionError = { message: e.message, stack: e.stack };
                 }
                 output.requestFromBrowser = context.request;
                 return output;
