@@ -215,7 +215,7 @@ export class CrawlerSetup implements CrawlerSetupOptions {
                         if (!this.isDevRun) {
                             return;
                         }
-
+            
                         const devToolsServer = new DevToolsServer({
                             containerHost: new URL(process.env.ACTOR_WEB_SERVER_URL!).host,
                             devToolsServerPort: process.env.ACTOR_WEB_SERVER_PORT,
@@ -224,6 +224,7 @@ export class CrawlerSetup implements CrawlerSetupOptions {
                         await devToolsServer.start();
                     },
                 ],
+                maxOpenPagesPerBrowser: 1, // Add this line - important for local development with devtools
             },
             launchContext: {
                 useChrome: this.input.useChrome,
@@ -234,8 +235,8 @@ export class CrawlerSetup implements CrawlerSetupOptions {
                     headless: this.input.headless,
                 },
             },
-            useSessionPool: !this.isDevRun,
-            persistCookiesPerSession: !this.isDevRun,
+            useSessionPool: false, // Always disable session pool in local development
+            persistCookiesPerSession: false, // Always disable cookie persistence in local development
             sessionPoolOptions: {
                 persistStateKeyValueStoreId: this.input.sessionPoolName ? SESSION_STORE_NAME : undefined,
                 persistStateKey: this.input.sessionPoolName,
