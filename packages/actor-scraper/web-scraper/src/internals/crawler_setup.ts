@@ -377,7 +377,7 @@ export class CrawlerSetup implements CrawlerSetupOptions {
     
         try {
             const output = await page.evaluate(async (ctxOpts, namespc) => {
-                const context = window[namespc].createContext(ctxOpts);
+                const context = window.crea.Apify.createContext(ctxOpts);
                 const output = {} as Output;
                 try {
                     const originalResult = await window[namespc].pageFunction(context);
